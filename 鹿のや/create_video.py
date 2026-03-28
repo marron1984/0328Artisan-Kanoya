@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""鹿のや Instagram リール動画生成スクリプト（9:16縦型 + BGM）"""
+"""鹿のや Instagram リール動画生成スクリプト（9:16縦型 + BGM + 明朝体）"""
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import subprocess
@@ -17,49 +17,44 @@ os.makedirs(FRAME_DIR, exist_ok=True)
 W, H = 1080, 1920
 FPS = 30
 
-# Scene definitions: (image_path, caption_lines, duration_sec)
+# Fonts - Noto Serif JP (明朝体)
+FONT_LIGHT = "/tmp/NotoSerifJP/SubsetOTF/JP/NotoSerifJP-Light.otf"
+FONT_REGULAR = "/tmp/NotoSerifJP/SubsetOTF/JP/NotoSerifJP-Regular.otf"
+FONT_SEMIBOLD = "/tmp/NotoSerifJP/SubsetOTF/JP/NotoSerifJP-SemiBold.otf"
+FONT_BOLD = "/tmp/NotoSerifJP/SubsetOTF/JP/NotoSerifJP-Bold.otf"
+
+# Caption animation styles
+ANIM_FADE_UP = "fade_up"          # フェードイン + 下から上へスライド
+ANIM_CHAR_BY_CHAR = "char_by_char"  # 一文字ずつ表示
+ANIM_CENTER_EXPAND = "center_expand"  # 中央から左右に広がる
+ANIM_FADE_ONLY = "fade_only"      # シンプルフェード
+ANIM_TYPEWRITER = "typewriter"    # タイプライター風
+ANIM_BLUR_IN = "blur_in"         # ぼかしからシャープに
+
+# Scene definitions: (image_path, caption_lines, duration_sec, animation_style)
 scenes = [
     (f"{WORK_DIR}/sakura_spring.jpg",
      ["鹿 の や", "", "— 春の訪れとともに —"],
-     4),
+     4, ANIM_CHAR_BY_CHAR),
     (f"{BASE_DIR}/7C1A5112.JPG",
      ["季節を纏うテーブル", "一皿の前に、もてなしは始まっている"],
-     4),
+     4, ANIM_FADE_UP),
     (f"{BASE_DIR}/7C1A5139.JPG",
      ["窓の向こうに広がる自然", "静寂が、最高の調味料になる"],
-     4),
+     4, ANIM_CENTER_EXPAND),
     (f"{BASE_DIR}/7C1A5384.JPG",
      ["素材と向き合う手仕事", "火加減ひとつに、職人の矜持が宿る"],
-     4),
+     4, ANIM_TYPEWRITER),
     (f"{BASE_DIR}/7C1A5493.JPG",
      ["選び抜かれた一本", "料理とワインが奏でるハーモニー"],
-     4),
+     4, ANIM_FADE_UP),
     (f"{BASE_DIR}/7C1A5507.JPG",
      ["カウンターに灯る温もり", "特別な夜を、ここで"],
-     4),
-    (None,  # End card
+     4, ANIM_BLUR_IN),
+    (f"{BASE_DIR}/7C1A5112.JPG",  # End card uses table setting photo
      ["鹿 の や", "", "ご予約・お問い合わせはお気軽に"],
-     3),
+     3, ANIM_FADE_ONLY),
 ]
-
-
-def find_font():
-    """Find a Japanese-capable font."""
-    font_paths = [
-        "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for p in font_paths:
-        if os.path.exists(p):
-            return p
-    import glob
-    cjk = glob.glob("/usr/share/fonts/**/Noto*CJK*", recursive=True)
-    if cjk:
-        return cjk[0]
-    return None
 
 
 def create_sakura_bg():
@@ -67,7 +62,6 @@ def create_sakura_bg():
     img = Image.new('RGB', (W, H))
     draw = ImageDraw.Draw(img)
 
-    # Soft spring gradient
     for y in range(H):
         r = int(255 - (y / H) * 40)
         g = int(210 + (y / H) * 30)
@@ -117,13 +111,10 @@ def load_and_fit(path, target_w, target_h):
     """Load image and fit to target size with cover crop."""
     img = Image.open(path)
     img_w, img_h = img.size
-
     scale = max(target_w / img_w, target_h / img_h)
     new_w = int(img_w * scale)
     new_h = int(img_h * scale)
-
     img = img.resize((new_w, new_h), Image.LANCZOS)
-
     left = (new_w - target_w) // 2
     top = (new_h - target_h) // 2
     img = img.crop((left, top, left + target_w, top + target_h))
@@ -134,65 +125,208 @@ def apply_ken_burns(img, frame_idx, total_frames, zoom_start=1.0, zoom_end=1.08)
     """Apply subtle Ken Burns (zoom) effect."""
     t = frame_idx / max(total_frames - 1, 1)
     zoom = zoom_start + (zoom_end - zoom_start) * t
-
     cw = int(W / zoom)
     ch = int(H / zoom)
     left = (W - cw) // 2
     top = (H - ch) // 2
-
     cropped = img.crop((left, top, left + cw, top + ch))
     return cropped.resize((W, H), Image.LANCZOS)
 
 
-def draw_caption(img, lines, font_path, opacity=220):
-    """Draw caption text with semi-transparent background at bottom."""
+def ease_out_cubic(t):
+    """Cubic ease-out for smooth deceleration."""
+    return 1 - (1 - t) ** 3
+
+
+def ease_in_out_sine(t):
+    """Sine ease-in-out for gentle motion."""
+    return -(math.cos(math.pi * t) - 1) / 2
+
+
+def draw_animated_caption(img, lines, frame_idx, total_frames, anim_style, is_end_card=False):
+    """Draw caption with various animation styles."""
     overlay = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    try:
-        font_large = ImageFont.truetype(font_path, 48) if font_path else ImageFont.load_default()
-        font_small = ImageFont.truetype(font_path, 30) if font_path else ImageFont.load_default()
-    except Exception:
-        font_large = ImageFont.load_default()
-        font_small = ImageFont.load_default()
+    font_title = ImageFont.truetype(FONT_SEMIBOLD, 52)
+    font_sub = ImageFont.truetype(FONT_LIGHT, 30)
 
-    total_height = 0
+    # Animation timing
+    anim_in_frames = int(FPS * 1.2)   # 1.2s for text animation
+    hold_frames = total_frames - anim_in_frames - int(FPS * 0.5)
+    anim_out_start = total_frames - int(FPS * 0.5)
+
+    # Overall opacity for fade out
+    if frame_idx >= anim_out_start:
+        master_opacity = 1.0 - ((frame_idx - anim_out_start) / (total_frames - anim_out_start))
+    else:
+        master_opacity = 1.0
+
+    # Prepare line data
     line_data = []
-    for line in lines:
+    total_text_height = 0
+    for idx, line in enumerate(lines):
         if not line:
-            line_data.append(("", font_small, 20))
-            total_height += 20
+            line_data.append(("", font_sub, 24))
+            total_text_height += 24
             continue
-        font = font_large if line == lines[0] else font_small
+        font = font_title if idx == 0 else font_sub
         bbox = draw.textbbox((0, 0), line, font=font)
-        lh = bbox[3] - bbox[1] + 18
+        lh = bbox[3] - bbox[1] + 20
         line_data.append((line, font, lh))
-        total_height += lh
+        total_text_height += lh
 
-    # Position caption in lower third (safe area for Reels)
-    bar_top = H - total_height - 280
-    bar_height = total_height + 80
-    draw.rectangle(
-        [(0, bar_top), (W, bar_top + bar_height)],
-        fill=(0, 0, 0, int(opacity * 0.55))
-    )
+    # Caption position - lower area safe for Reels
+    if is_end_card:
+        # End card: center vertically
+        bar_top = (H - total_text_height) // 2 - 60
+    else:
+        bar_top = H - total_text_height - 300
 
-    y = bar_top + 40
-    for text, font, lh in line_data:
+    bar_height = total_text_height + 100
+
+    # Semi-transparent background bar
+    bar_opacity = int(140 * master_opacity)
+    if anim_style == ANIM_CENTER_EXPAND:
+        # Bar expands from center
+        progress = min(1.0, frame_idx / anim_in_frames)
+        progress = ease_out_cubic(progress)
+        bar_w = int(W * progress)
+        bar_left = (W - bar_w) // 2
+        draw.rectangle(
+            [(bar_left, bar_top), (bar_left + bar_w, bar_top + bar_height)],
+            fill=(0, 0, 0, bar_opacity)
+        )
+    else:
+        draw.rectangle(
+            [(0, bar_top), (W, bar_top + bar_height)],
+            fill=(0, 0, 0, bar_opacity)
+        )
+
+    # Draw each line with animation
+    y = bar_top + 50
+    for line_idx, (text, font, lh) in enumerate(line_data):
         if not text:
             y += lh
             continue
+
         bbox = draw.textbbox((0, 0), text, font=font)
         tw = bbox[2] - bbox[0]
-        x = (W - tw) // 2
-        # Text shadow
-        draw.text((x + 2, y + 2), text, font=font, fill=(0, 0, 0, int(opacity * 0.5)))
-        draw.text((x, y), text, font=font, fill=(255, 255, 255, opacity))
+        base_x = (W - tw) // 2
+
+        # Per-line stagger delay
+        line_delay = line_idx * int(FPS * 0.3)
+        local_frame = frame_idx - line_delay
+
+        if local_frame < 0:
+            y += lh
+            continue
+
+        line_progress = min(1.0, local_frame / anim_in_frames)
+
+        if anim_style == ANIM_FADE_UP:
+            # Fade in + slide up
+            progress = ease_out_cubic(line_progress)
+            text_opacity = int(240 * progress * master_opacity)
+            offset_y = int(40 * (1 - progress))
+            _draw_text_with_shadow(draw, base_x, y + offset_y, text, font, text_opacity)
+
+        elif anim_style == ANIM_CHAR_BY_CHAR:
+            # Character by character reveal
+            total_chars = len(text)
+            chars_shown = int(total_chars * min(1.0, local_frame / (anim_in_frames * 0.8)))
+            visible_text = text[:chars_shown]
+            if visible_text:
+                text_opacity = int(240 * master_opacity)
+                # Center the full text, but only draw visible portion
+                _draw_text_with_shadow(draw, base_x, y, visible_text, font, text_opacity)
+
+        elif anim_style == ANIM_CENTER_EXPAND:
+            # Text fades in after bar expands
+            if line_progress > 0.3:
+                text_progress = min(1.0, (line_progress - 0.3) / 0.7)
+                text_opacity = int(240 * ease_out_cubic(text_progress) * master_opacity)
+                _draw_text_with_shadow(draw, base_x, y, text, font, text_opacity)
+
+        elif anim_style == ANIM_TYPEWRITER:
+            # Typewriter with cursor
+            total_chars = len(text)
+            char_progress = local_frame / (anim_in_frames * 0.7)
+            chars_shown = min(total_chars, int(total_chars * char_progress))
+            visible_text = text[:chars_shown]
+            text_opacity = int(240 * master_opacity)
+            if visible_text:
+                _draw_text_with_shadow(draw, base_x, y, visible_text, font, text_opacity)
+            # Blinking cursor
+            if chars_shown < total_chars and (frame_idx // 8) % 2 == 0:
+                cursor_bbox = draw.textbbox((0, 0), visible_text, font=font) if visible_text else (0, 0, 0, 0)
+                cursor_x = base_x + (cursor_bbox[2] if visible_text else 0)
+                draw.rectangle(
+                    [(cursor_x + 4, y), (cursor_x + 7, y + lh - 20)],
+                    fill=(255, 255, 255, text_opacity)
+                )
+
+        elif anim_style == ANIM_BLUR_IN:
+            # Simple fade with scale illusion (slight vertical stretch)
+            progress = ease_in_out_sine(line_progress)
+            text_opacity = int(240 * progress * master_opacity)
+            # Slight scale by adjusting y position
+            scale_offset = int(8 * (1 - progress))
+            _draw_text_with_shadow(draw, base_x, y - scale_offset, text, font, text_opacity)
+
+        elif anim_style == ANIM_FADE_ONLY:
+            # Simple elegant fade
+            progress = ease_in_out_sine(line_progress)
+            text_opacity = int(240 * progress * master_opacity)
+            _draw_text_with_shadow(draw, base_x, y, text, font, text_opacity)
+
         y += lh
+
+    # Decorative line for elegance (thin gold line)
+    if master_opacity > 0:
+        line_y = bar_top + 42
+        line_opacity = int(120 * master_opacity)
+        line_progress = min(1.0, frame_idx / anim_in_frames)
+        line_w = int(200 * ease_out_cubic(line_progress))
+        line_left = (W - line_w) // 2
+        if line_w > 0:
+            draw.rectangle(
+                [(line_left, line_y), (line_left + line_w, line_y + 1)],
+                fill=(212, 175, 125, line_opacity)
+            )
+            # Bottom decorative line
+            bottom_line_y = bar_top + bar_height - 42
+            draw.rectangle(
+                [(line_left, bottom_line_y), (line_left + line_w, bottom_line_y + 1)],
+                fill=(212, 175, 125, line_opacity)
+            )
 
     img_rgba = img.convert('RGBA')
     composited = Image.alpha_composite(img_rgba, overlay)
     return composited.convert('RGB')
+
+
+def _draw_text_with_shadow(draw, x, y, text, font, opacity):
+    """Draw text with subtle shadow for depth."""
+    if opacity <= 0:
+        return
+    # Shadow
+    shadow_opacity = int(opacity * 0.4)
+    draw.text((x + 2, y + 2), text, font=font, fill=(0, 0, 0, shadow_opacity))
+    draw.text((x + 1, y + 1), text, font=font, fill=(0, 0, 0, int(shadow_opacity * 0.6)))
+    # Main text
+    draw.text((x, y), text, font=font, fill=(255, 255, 255, opacity))
+
+
+def create_end_card_image(base_img):
+    """Create a darkened, blurred end card from a photo."""
+    # Darken the image
+    from PIL import ImageEnhance
+    enhancer = ImageEnhance.Brightness(base_img)
+    dark = enhancer.enhance(0.3)
+    # Add slight blur for dreamy effect
+    dark = dark.filter(ImageFilter.GaussianBlur(radius=6))
+    return dark
 
 
 def create_fade(frame1, frame2, t):
@@ -200,20 +334,9 @@ def create_fade(frame1, frame2, t):
     return Image.blend(frame1, frame2, t)
 
 
-def create_end_card():
-    """Create ending card with dark elegant background."""
-    img = Image.new('RGB', (W, H))
-    draw = ImageDraw.Draw(img)
-    for y in range(H):
-        v = int(25 + (y / H) * 15)
-        draw.line([(0, y), (W, y)], fill=(v, v - 3, v - 5))
-    return img
-
-
 def main():
-    font_path = find_font()
-    print(f"Using font: {font_path}")
     print(f"Output size: {W}x{H} (Instagram Reels 9:16)")
+    print(f"Font: Noto Serif JP (明朝体)")
 
     # Regenerate sakura background in vertical format
     print("Generating sakura background (9:16)...")
@@ -223,29 +346,27 @@ def main():
     fade_frames = int(FPS * 0.8)
     prev_last_frame = None
 
-    for scene_idx, (img_path, caption, duration) in enumerate(scenes):
+    for scene_idx, (img_path, caption, duration, anim_style) in enumerate(scenes):
         total_frames = int(duration * FPS)
-        print(f"Scene {scene_idx + 1}/{len(scenes)}: {caption[0]} ({total_frames} frames)")
+        is_end_card = (scene_idx == len(scenes) - 1)
+        print(f"Scene {scene_idx + 1}/{len(scenes)}: {caption[0]} [{anim_style}] ({total_frames} frames)")
 
         if img_path:
             base_img = load_and_fit(img_path, W, H)
+            if is_end_card:
+                base_img = create_end_card_image(base_img)
         else:
-            base_img = create_end_card()
+            # Fallback solid dark
+            base_img = Image.new('RGB', (W, H), (25, 22, 20))
 
         for i in range(total_frames):
             frame = apply_ken_burns(base_img, i, total_frames)
 
-            if i < FPS:
-                cap_opacity = int(220 * (i / FPS))
-            elif i > total_frames - FPS // 2:
-                cap_opacity = int(220 * ((total_frames - i) / (FPS // 2)))
-            else:
-                cap_opacity = 220
+            frame = draw_animated_caption(
+                frame, caption, i, total_frames, anim_style, is_end_card
+            )
 
-            cap_opacity = max(0, min(255, cap_opacity))
-            if cap_opacity > 0:
-                frame = draw_caption(frame, caption, font_path, cap_opacity)
-
+            # Crossfade with previous scene
             if prev_last_frame and i < fade_frames:
                 t = i / fade_frames
                 frame = create_fade(prev_last_frame, frame, t)
@@ -281,12 +402,6 @@ def main():
     print("Encoding MP4 with BGM...")
     subprocess.run(cmd, check=True, capture_output=True)
     print(f"Reel video created: {output_path}")
-
-    # Also remove old horizontal video
-    old_video = f"{WORK_DIR}/shikanoya_spring.mp4"
-    if os.path.exists(old_video):
-        os.remove(old_video)
-        print(f"Removed old video: {old_video}")
 
     # Cleanup frames
     import shutil
