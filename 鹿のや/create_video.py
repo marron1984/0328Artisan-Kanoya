@@ -52,7 +52,7 @@ scenes = [
      ["カウンターに灯る温もり", "特別な夜を、ここで"],
      4, ANIM_BLUR_IN),
     (f"{BASE_DIR}/7C1A5112.JPG",  # End card uses table setting photo
-     ["鹿 の や", "", "ご予約・お問い合わせはお気軽に"],
+     ["L'Artisan KANOYA", "", "詳細はプロフィールから"],
      3, ANIM_FADE_ONLY),
 ]
 
