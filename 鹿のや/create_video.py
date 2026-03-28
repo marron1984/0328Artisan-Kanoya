@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""鹿のや プロモーション動画生成スクリプト"""
+"""鹿のや Instagram リール動画生成スクリプト（9:16縦型 + BGM）"""
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import subprocess
@@ -10,9 +10,11 @@ import random
 BASE_DIR = "/home/user/0328Artisan-Kanoya"
 WORK_DIR = f"{BASE_DIR}/鹿のや"
 FRAME_DIR = f"{WORK_DIR}/frames"
+BGM_PATH = f"{BASE_DIR}/Sovereign_Bloom.mp3"
 os.makedirs(FRAME_DIR, exist_ok=True)
 
-W, H = 1920, 1080
+# Instagram Reels: 1080x1920 (9:16)
+W, H = 1080, 1920
 FPS = 30
 
 # Scene definitions: (image_path, caption_lines, duration_sec)
@@ -35,7 +37,7 @@ scenes = [
     (f"{BASE_DIR}/7C1A5507.JPG",
      ["カウンターに灯る温もり", "特別な夜を、ここで"],
      4),
-    (None,  # End card - solid color
+    (None,  # End card
      ["鹿 の や", "", "ご予約・お問い合わせはお気軽に"],
      3),
 ]
@@ -53,13 +55,62 @@ def find_font():
     for p in font_paths:
         if os.path.exists(p):
             return p
-    # Try to find any CJK font
     import glob
     cjk = glob.glob("/usr/share/fonts/**/Noto*CJK*", recursive=True)
     if cjk:
         return cjk[0]
-    # Fallback
     return None
+
+
+def create_sakura_bg():
+    """Generate spring sakura background in 9:16 vertical format."""
+    img = Image.new('RGB', (W, H))
+    draw = ImageDraw.Draw(img)
+
+    # Soft spring gradient
+    for y in range(H):
+        r = int(255 - (y / H) * 40)
+        g = int(210 + (y / H) * 30)
+        b = int(230 + (y / H) * 25)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
+
+    random.seed(42)
+
+    def draw_petal(draw, cx, cy, size, angle, color):
+        points = []
+        for i in range(20):
+            t = i / 20 * 2 * math.pi
+            r = size * (0.5 + 0.5 * math.cos(t)) * (0.3 + 0.7 * abs(math.sin(t)))
+            x = cx + r * math.cos(t + angle)
+            y = cy + r * math.sin(t + angle)
+            points.append((x, y))
+        if len(points) > 2:
+            draw.polygon(points, fill=color)
+
+    for _ in range(150):
+        cx = random.randint(-50, W + 50)
+        cy = random.randint(-50, H + 50)
+        size = random.randint(20, 70)
+        angle = random.uniform(0, 2 * math.pi)
+        pink = random.randint(200, 255)
+        g = random.randint(150, 200)
+        b = random.randint(180, 220)
+        af = random.uniform(0.4, 1.0)
+        color = (int(pink * af + 255 * (1 - af)),
+                 int(g * af + 220 * (1 - af)),
+                 int(b * af + 235 * (1 - af)))
+        draw_petal(draw, cx, cy, size, angle, color)
+
+    for _ in range(250):
+        cx = random.randint(0, W)
+        cy = random.randint(0, H)
+        size = random.randint(3, 14)
+        color = (random.randint(240, 255), random.randint(180, 210), random.randint(200, 225))
+        draw.ellipse([cx - size, cy - size // 2, cx + size, cy + size // 2], fill=color)
+
+    img = img.filter(ImageFilter.GaussianBlur(radius=2))
+    img.save(f"{WORK_DIR}/sakura_spring.jpg", quality=90)
+    return img
 
 
 def load_and_fit(path, target_w, target_h):
@@ -67,14 +118,12 @@ def load_and_fit(path, target_w, target_h):
     img = Image.open(path)
     img_w, img_h = img.size
 
-    # Calculate scale to cover
     scale = max(target_w / img_w, target_h / img_h)
     new_w = int(img_w * scale)
     new_h = int(img_h * scale)
 
     img = img.resize((new_w, new_h), Image.LANCZOS)
 
-    # Center crop
     left = (new_w - target_w) // 2
     top = (new_h - target_h) // 2
     img = img.crop((left, top, left + target_w, top + target_h))
@@ -96,19 +145,17 @@ def apply_ken_burns(img, frame_idx, total_frames, zoom_start=1.0, zoom_end=1.08)
 
 
 def draw_caption(img, lines, font_path, opacity=220):
-    """Draw caption text with semi-transparent background."""
+    """Draw caption text with semi-transparent background at bottom."""
     overlay = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    # Font sizes
     try:
-        font_large = ImageFont.truetype(font_path, 52) if font_path else ImageFont.load_default()
-        font_small = ImageFont.truetype(font_path, 32) if font_path else ImageFont.load_default()
+        font_large = ImageFont.truetype(font_path, 48) if font_path else ImageFont.load_default()
+        font_small = ImageFont.truetype(font_path, 30) if font_path else ImageFont.load_default()
     except Exception:
         font_large = ImageFont.load_default()
         font_small = ImageFont.load_default()
 
-    # Calculate text block height
     total_height = 0
     line_data = []
     for line in lines:
@@ -118,19 +165,18 @@ def draw_caption(img, lines, font_path, opacity=220):
             continue
         font = font_large if line == lines[0] else font_small
         bbox = draw.textbbox((0, 0), line, font=font)
-        lh = bbox[3] - bbox[1] + 16
+        lh = bbox[3] - bbox[1] + 18
         line_data.append((line, font, lh))
         total_height += lh
 
-    # Semi-transparent bar at bottom
-    bar_top = H - total_height - 100
+    # Position caption in lower third (safe area for Reels)
+    bar_top = H - total_height - 280
     bar_height = total_height + 80
     draw.rectangle(
         [(0, bar_top), (W, bar_top + bar_height)],
-        fill=(0, 0, 0, int(opacity * 0.6))
+        fill=(0, 0, 0, int(opacity * 0.55))
     )
 
-    # Draw text
     y = bar_top + 40
     for text, font, lh in line_data:
         if not text:
@@ -139,10 +185,11 @@ def draw_caption(img, lines, font_path, opacity=220):
         bbox = draw.textbbox((0, 0), text, font=font)
         tw = bbox[2] - bbox[0]
         x = (W - tw) // 2
+        # Text shadow
+        draw.text((x + 2, y + 2), text, font=font, fill=(0, 0, 0, int(opacity * 0.5)))
         draw.text((x, y), text, font=font, fill=(255, 255, 255, opacity))
         y += lh
 
-    # Composite
     img_rgba = img.convert('RGBA')
     composited = Image.alpha_composite(img_rgba, overlay)
     return composited.convert('RGB')
@@ -157,7 +204,6 @@ def create_end_card():
     """Create ending card with dark elegant background."""
     img = Image.new('RGB', (W, H))
     draw = ImageDraw.Draw(img)
-    # Dark gradient
     for y in range(H):
         v = int(25 + (y / H) * 15)
         draw.line([(0, y), (W, y)], fill=(v, v - 3, v - 5))
@@ -167,30 +213,31 @@ def create_end_card():
 def main():
     font_path = find_font()
     print(f"Using font: {font_path}")
+    print(f"Output size: {W}x{H} (Instagram Reels 9:16)")
+
+    # Regenerate sakura background in vertical format
+    print("Generating sakura background (9:16)...")
+    create_sakura_bg()
 
     frame_num = 0
-    fade_frames = int(FPS * 0.8)  # 0.8 sec crossfade
-
+    fade_frames = int(FPS * 0.8)
     prev_last_frame = None
 
     for scene_idx, (img_path, caption, duration) in enumerate(scenes):
         total_frames = int(duration * FPS)
         print(f"Scene {scene_idx + 1}/{len(scenes)}: {caption[0]} ({total_frames} frames)")
 
-        # Load base image
         if img_path:
             base_img = load_and_fit(img_path, W, H)
         else:
             base_img = create_end_card()
 
         for i in range(total_frames):
-            # Ken Burns effect
             frame = apply_ken_burns(base_img, i, total_frames)
 
-            # Caption fade in/out
-            if i < FPS:  # First second: fade in
+            if i < FPS:
                 cap_opacity = int(220 * (i / FPS))
-            elif i > total_frames - FPS // 2:  # Last 0.5s: fade out
+            elif i > total_frames - FPS // 2:
                 cap_opacity = int(220 * ((total_frames - i) / (FPS // 2)))
             else:
                 cap_opacity = 220
@@ -199,7 +246,6 @@ def main():
             if cap_opacity > 0:
                 frame = draw_caption(frame, caption, font_path, cap_opacity)
 
-            # Crossfade with previous scene
             if prev_last_frame and i < fade_frames:
                 t = i / fade_frames
                 frame = create_fade(prev_last_frame, frame, t)
@@ -212,22 +258,35 @@ def main():
 
     print(f"Total frames: {frame_num}")
 
-    # Encode to MP4 with ffmpeg
-    output_path = f"{WORK_DIR}/shikanoya_spring.mp4"
+    # Encode to MP4 with BGM
+    output_path = f"{WORK_DIR}/shikanoya_spring_reel.mp4"
+    video_duration = frame_num / FPS
+
     cmd = [
         "ffmpeg", "-y",
         "-framerate", str(FPS),
         "-i", f"{FRAME_DIR}/frame_%05d.jpg",
+        "-i", BGM_PATH,
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-preset", "medium",
-        "-crf", "23",
+        "-crf", "20",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-af", f"afade=t=in:st=0:d=2,afade=t=out:st={video_duration - 2}:d=2",
+        "-shortest",
         "-movflags", "+faststart",
         output_path
     ]
-    print("Encoding MP4...")
+    print("Encoding MP4 with BGM...")
     subprocess.run(cmd, check=True, capture_output=True)
-    print(f"Video created: {output_path}")
+    print(f"Reel video created: {output_path}")
+
+    # Also remove old horizontal video
+    old_video = f"{WORK_DIR}/shikanoya_spring.mp4"
+    if os.path.exists(old_video):
+        os.remove(old_video)
+        print(f"Removed old video: {old_video}")
 
     # Cleanup frames
     import shutil
