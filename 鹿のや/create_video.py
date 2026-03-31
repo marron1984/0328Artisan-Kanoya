@@ -33,7 +33,7 @@ ANIM_BLUR_IN = "blur_in"         # ぼかしからシャープに
 
 # Scene definitions: (image_path, caption_lines, duration_sec, animation_style)
 scenes = [
-    (f"{WORK_DIR}/sakura_spring.jpg",
+    (f"{WORK_DIR}/607198937741000790.jpg",
      ["鹿 の や", "", "— 春の訪れとともに —"],
      2.5, ANIM_CHAR_BY_CHAR),
     (f"{BASE_DIR}/7C1A5112.JPG",
