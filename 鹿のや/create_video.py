@@ -35,7 +35,7 @@ ANIM_BLUR_IN = "blur_in"         # ぼかしからシャープに
 scenes = [
     (f"{WORK_DIR}/sakura_spring.jpg",
      ["鹿 の や", "", "— 春の訪れとともに —"],
-     4, ANIM_CHAR_BY_CHAR),
+     2.5, ANIM_CHAR_BY_CHAR),
     (f"{BASE_DIR}/7C1A5112.JPG",
      ["季節を纏うテーブル", "一皿の前に、もてなしは始まっている"],
      4, ANIM_FADE_UP),
