@@ -31,29 +31,34 @@ ANIM_FADE_ONLY = "fade_only"      # シンプルフェード
 ANIM_TYPEWRITER = "typewriter"    # タイプライター風
 ANIM_BLUR_IN = "blur_in"         # ぼかしからシャープに
 
-# Scene definitions: (image_path, caption_lines, duration_sec, animation_style)
+# Slide-in directions for scene transitions
+SLIDE_NONE = "none"
+SLIDE_FROM_RIGHT = "from_right"
+SLIDE_FROM_LEFT = "from_left"
+
+# Scene definitions: (image_path, caption_lines, duration_sec, animation_style, slide_direction)
 scenes = [
     (f"{WORK_DIR}/607198937741000790.jpg",
      ["鹿 の や", "", "— 春の訪れとともに —"],
-     2.5, ANIM_CHAR_BY_CHAR),
+     2.5, ANIM_CHAR_BY_CHAR, SLIDE_NONE),
     (f"{BASE_DIR}/7C1A5112.JPG",
      ["季節を纏うテーブル", "一皿の前に、もてなしは始まっている"],
-     4, ANIM_FADE_UP),
+     4, ANIM_FADE_UP, SLIDE_FROM_RIGHT),
     (f"{BASE_DIR}/7C1A5139.JPG",
      ["窓の向こうに広がる自然", "静寂が、最高の調味料になる"],
-     4, ANIM_CENTER_EXPAND),
+     4, ANIM_CENTER_EXPAND, SLIDE_FROM_LEFT),
     (f"{BASE_DIR}/7C1A5384.JPG",
      ["素材と向き合う手仕事", "火加減ひとつに、職人の矜持が宿る"],
-     4, ANIM_TYPEWRITER),
+     4, ANIM_TYPEWRITER, SLIDE_FROM_RIGHT),
     (f"{BASE_DIR}/7C1A5493.JPG",
      ["選び抜かれた一本", "料理と日本酒が織りなす余韻"],
-     4, ANIM_FADE_UP),
+     4, ANIM_FADE_UP, SLIDE_FROM_LEFT),
     (f"{BASE_DIR}/7C1A5507.JPG",
      ["カウンターに灯る温もり", "特別な夜を、ここで"],
-     4, ANIM_BLUR_IN),
+     4, ANIM_BLUR_IN, SLIDE_FROM_RIGHT),
     (f"{BASE_DIR}/7C1A5112.JPG",  # End card uses table setting photo
      ["L'Artisan KANOYA", "", "詳細はプロフィールから"],
-     3, ANIM_FADE_ONLY),
+     3, ANIM_FADE_ONLY, SLIDE_NONE),
 ]
 
 
@@ -107,30 +112,87 @@ def create_sakura_bg():
     return img
 
 
-def load_and_fit(path, target_w, target_h):
-    """Load image and fit to target size with cover crop."""
+def load_and_fit(path, target_w, target_h, extra_margin=0.15):
+    """Load image and fit to target size with cover crop.
+    extra_margin: load slightly larger for slide/pan room."""
     img = Image.open(path)
     img_w, img_h = img.size
-    scale = max(target_w / img_w, target_h / img_h)
+    margin_w = int(target_w * (1 + extra_margin))
+    margin_h = int(target_h * (1 + extra_margin))
+    scale = max(margin_w / img_w, margin_h / img_h)
     new_w = int(img_w * scale)
     new_h = int(img_h * scale)
     img = img.resize((new_w, new_h), Image.LANCZOS)
-    left = (new_w - target_w) // 2
-    top = (new_h - target_h) // 2
-    img = img.crop((left, top, left + target_w, top + target_h))
+    left = (new_w - margin_w) // 2
+    top = (new_h - margin_h) // 2
+    img = img.crop((left, top, left + margin_w, top + margin_h))
     return img
 
 
-def apply_ken_burns(img, frame_idx, total_frames, zoom_start=1.0, zoom_end=1.08):
-    """Apply subtle Ken Burns (zoom) effect."""
+def apply_ken_burns_with_sway(img, frame_idx, total_frames,
+                               zoom_start=1.0, zoom_end=1.08,
+                               sway_amount=12):
+    """Apply Ken Burns zoom + subtle organic sway (揺らぎ)."""
     t = frame_idx / max(total_frames - 1, 1)
     zoom = zoom_start + (zoom_end - zoom_start) * t
+
+    img_w, img_h = img.size
     cw = int(W / zoom)
     ch = int(H / zoom)
-    left = (W - cw) // 2
-    top = (H - ch) // 2
+
+    # Organic sway using sine waves at different frequencies
+    sway_x = int(sway_amount * math.sin(t * math.pi * 2.5) * (1 - t * 0.3))
+    sway_y = int(sway_amount * 0.6 * math.sin(t * math.pi * 1.8 + 0.7))
+
+    cx = img_w // 2 + sway_x
+    cy = img_h // 2 + sway_y
+
+    left = max(0, cx - cw // 2)
+    top = max(0, cy - ch // 2)
+    right = min(img_w, left + cw)
+    bottom = min(img_h, top + ch)
+
+    # Adjust if we hit boundaries
+    if right - left < cw:
+        left = max(0, right - cw)
+    if bottom - top < ch:
+        top = max(0, bottom - ch)
+
     cropped = img.crop((left, top, left + cw, top + ch))
     return cropped.resize((W, H), Image.LANCZOS)
+
+
+def apply_slide_transition(prev_frame, next_img, frame_idx, slide_frames,
+                            direction, total_scene_frames):
+    """Slide the new image in from left or right over a black/prev background."""
+    t = frame_idx / max(slide_frames - 1, 1)
+    ease_t = ease_out_cubic(t)
+
+    # Get the current next frame with ken burns applied
+    next_frame = apply_ken_burns_with_sway(next_img, 0, total_scene_frames)
+
+    if direction == SLIDE_FROM_RIGHT:
+        offset_x = int(W * (1 - ease_t))
+    elif direction == SLIDE_FROM_LEFT:
+        offset_x = int(-W * (1 - ease_t))
+    else:
+        return next_frame
+
+    # Composite: prev_frame as background, next_frame sliding in
+    result = prev_frame.copy()
+    # Paste next frame at offset position
+    if offset_x >= 0:
+        # Sliding from right: paste the visible left portion of next_frame
+        visible_w = W - offset_x
+        crop_region = next_frame.crop((0, 0, visible_w, H))
+        result.paste(crop_region, (offset_x, 0))
+    else:
+        # Sliding from left: paste the visible right portion of next_frame
+        visible_w = W + offset_x
+        crop_region = next_frame.crop((W - visible_w, 0, W, H))
+        result.paste(crop_region, (0, 0))
+
+    return result
 
 
 def ease_out_cubic(t):
@@ -343,33 +405,45 @@ def main():
     create_sakura_bg()
 
     frame_num = 0
-    fade_frames = int(FPS * 0.8)
+    slide_frames = int(FPS * 0.7)  # 0.7s slide-in transition
+    fade_frames = int(FPS * 0.8)   # 0.8s crossfade fallback
     prev_last_frame = None
 
-    for scene_idx, (img_path, caption, duration, anim_style) in enumerate(scenes):
+    for scene_idx, (img_path, caption, duration, anim_style, slide_dir) in enumerate(scenes):
         total_frames = int(duration * FPS)
         is_end_card = (scene_idx == len(scenes) - 1)
-        print(f"Scene {scene_idx + 1}/{len(scenes)}: {caption[0]} [{anim_style}] ({total_frames} frames)")
+        print(f"Scene {scene_idx + 1}/{len(scenes)}: {caption[0]} [{anim_style}] slide={slide_dir} ({total_frames} frames)")
 
         if img_path:
             base_img = load_and_fit(img_path, W, H)
             if is_end_card:
                 base_img = create_end_card_image(base_img)
         else:
-            # Fallback solid dark
             base_img = Image.new('RGB', (W, H), (25, 22, 20))
 
         for i in range(total_frames):
-            frame = apply_ken_burns(base_img, i, total_frames)
+            # Apply Ken Burns with organic sway
+            frame = apply_ken_burns_with_sway(base_img, i, total_frames)
 
-            frame = draw_animated_caption(
-                frame, caption, i, total_frames, anim_style, is_end_card
-            )
+            # Caption (delay caption start slightly during slide-in)
+            caption_delay = slide_frames if (prev_last_frame and slide_dir != SLIDE_NONE) else 0
+            caption_frame = max(0, i - caption_delay)
+            caption_total = total_frames - caption_delay
+            if caption_frame >= 0 and caption_total > 0:
+                frame = draw_animated_caption(
+                    frame, caption, caption_frame, caption_total, anim_style, is_end_card
+                )
 
-            # Crossfade with previous scene
-            if prev_last_frame and i < fade_frames:
-                t = i / fade_frames
-                frame = create_fade(prev_last_frame, frame, t)
+            # Scene transition: slide-in or crossfade
+            if prev_last_frame and i < slide_frames:
+                if slide_dir != SLIDE_NONE:
+                    frame = apply_slide_transition(
+                        prev_last_frame, base_img, i, slide_frames,
+                        slide_dir, total_frames
+                    )
+                else:
+                    t = i / fade_frames
+                    frame = create_fade(prev_last_frame, frame, min(1.0, t))
 
             frame.save(f"{FRAME_DIR}/frame_{frame_num:05d}.jpg", quality=85)
             frame_num += 1
